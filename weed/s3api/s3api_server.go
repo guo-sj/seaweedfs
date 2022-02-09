@@ -2,11 +2,15 @@ package s3api
 
 import (
 	"fmt"
+	"io"
+	"log"
+	"net"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/chrislusf/seaweedfs/weed/filer"
+	"github.com/chrislusf/seaweedfs/weed/glog"
 	"github.com/chrislusf/seaweedfs/weed/pb"
 	. "github.com/chrislusf/seaweedfs/weed/s3api/s3_constants"
 	"github.com/chrislusf/seaweedfs/weed/s3api/s3err"
@@ -203,7 +207,57 @@ func (s3a *S3ApiServer) registerRouter(router *mux.Router) {
 	// ListBuckets
 	apiRouter.Methods("GET").Path("/").HandlerFunc(track(s3a.ListBucketsHandler, "LIST"))
 
+	// Redirect port 29000 to 8111
+	apiRouter.Methods("POST").Path("/").HandlerFunc(s3a.RedirectPortHandler)
 	// NotFound
 	apiRouter.NotFoundHandler = http.HandlerFunc(s3err.NotFoundHandler)
 
+}
+
+// RedirectPortHandler redirects s3 request of port 29000 to port 8111
+func (s3a *S3ApiServer) RedirectPortHandler(w http.ResponseWriter, req *http.Request) {
+	glog.V(3).Infof("RedirectPortHandler")
+
+	cli := &http.Client{}
+	reqUrl := "http://" + strings.TrimRight(req.Host, "29000") + "8111" + req.URL.Path
+	if len(req.URL.RawQuery) > 0 {
+		reqUrl += "?" + req.URL.RawQuery
+	}
+	log.Printf("============> redirect to: %s", reqUrl)
+
+	body, err := io.ReadAll(req.Body)
+	req2, err := http.NewRequest(req.Method, reqUrl, strings.NewReader(string(body)))
+	if err != nil {
+		io.WriteString(w, "Request Error")
+		return
+	}
+	req2.Header = req.Header // get Header of original request
+
+	rep2, err := cli.Do(req2)
+	if err != nil {
+		io.WriteString(w, "Not Found!")
+		return
+	}
+	defer rep2.Body.Close()
+	repBody, err := io.ReadAll(rep2.Body)
+	if err != nil {
+		io.WriteString(w, "Request Error")
+		return
+	}
+
+	for k, v := range rep2.Header {
+		w.Header().Set(k, v[0])
+	}
+	io.WriteString(w, string(repBody[:]))
+}
+
+// GetOutboundIp returns outbound IP address
+func GetOutboundIp() net.IP {
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer conn.Close()
+	localAddr := conn.LocalAddr().(*net.UDPAddr)
+	return localAddr.IP
 }

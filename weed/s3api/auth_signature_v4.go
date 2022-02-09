@@ -23,6 +23,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -93,6 +94,11 @@ func getContentSha256Cksum(r *http.Request) string {
 
 // Verify authorization header - http://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-authenticating-requests.html
 func (iam *IdentityAccessManagement) doesSignatureMatch(hashedPayload string, r *http.Request) (*Identity, s3err.ErrorCode) {
+	// handle signature
+	localIp := fmt.Sprint(GetOutboundIp())
+	if strings.Split(r.RemoteAddr, ":")[0] == localIp {
+		r.Host = strings.TrimRight(r.Host, "8111") + "29000"
+	}
 
 	// Copy request.
 	req := *r
