@@ -218,13 +218,14 @@ func (s3a *S3ApiServer) registerRouter(router *mux.Router) {
 func (s3a *S3ApiServer) RedirectPortHandler(w http.ResponseWriter, req *http.Request) {
 	glog.V(3).Infof("RedirectPortHandler")
 
+	// get new url
 	cli := &http.Client{}
 	reqUrl := "http://" + strings.TrimRight(req.Host, "29000") + "8111" + req.URL.Path
 	if len(req.URL.RawQuery) > 0 {
 		reqUrl += "?" + req.URL.RawQuery
 	}
-	log.Printf("============> redirect to: %s", reqUrl)
 
+	// get new http request
 	body, err := io.ReadAll(req.Body)
 	req2, err := http.NewRequest(req.Method, reqUrl, strings.NewReader(string(body)))
 	if err != nil {
@@ -233,12 +234,15 @@ func (s3a *S3ApiServer) RedirectPortHandler(w http.ResponseWriter, req *http.Req
 	}
 	req2.Header = req.Header // get Header of original request
 
+	// redirect request
 	rep2, err := cli.Do(req2)
 	if err != nil {
 		io.WriteString(w, "Not Found!")
 		return
 	}
 	defer rep2.Body.Close()
+
+	// get response
 	repBody, err := io.ReadAll(rep2.Body)
 	if err != nil {
 		io.WriteString(w, "Request Error")
