@@ -89,6 +89,11 @@ type GetUserPolicyResponse struct {
 	} `xml:"GetUserPolicyResult"`
 }
 
+type UpdateAccessKeyResponse struct {
+	CommonResponse
+	XMLName xml.Name `xml:"https://iam.amazonaws.com/doc/2010-05-08/ UpdateAccessKeyResponse"`
+}
+
 type ErrorResponse struct {
 	CommonResponse
 	XMLName xml.Name `xml:"https://iam.amazonaws.com/doc/2010-05-08/ ErrorResponse"`

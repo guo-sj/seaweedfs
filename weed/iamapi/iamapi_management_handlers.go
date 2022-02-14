@@ -4,10 +4,6 @@ import (
 	"crypto/sha1"
 	"encoding/json"
 	"fmt"
-	"github.com/chrislusf/seaweedfs/weed/glog"
-	"github.com/chrislusf/seaweedfs/weed/pb/iam_pb"
-	"github.com/chrislusf/seaweedfs/weed/s3api/s3_constants"
-	"github.com/chrislusf/seaweedfs/weed/s3api/s3err"
 	"math/rand"
 	"net/http"
 	"net/url"
@@ -15,6 +11,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/chrislusf/seaweedfs/weed/glog"
+	"github.com/chrislusf/seaweedfs/weed/pb/iam_pb"
+	"github.com/chrislusf/seaweedfs/weed/s3api/s3_constants"
+	"github.com/chrislusf/seaweedfs/weed/s3api/s3err"
 
 	"github.com/aws/aws-sdk-go/service/iam"
 )
@@ -360,6 +361,22 @@ func (iama *IamApiServer) DeleteAccessKey(s3cfg *iam_pb.S3ApiConfiguration, valu
 	return resp
 }
 
+func (iama *IamApiServer) UpdateAccessKey(s3cfg *iam_pb.S3ApiConfiguration, values url.Values) (resp UpdateAccessKeyResponse) {
+	userName := values.Get("UserName")
+	accessKeyId := values.Get("AccessKeyId")
+	status := values.Get("Status")
+	for _, ident := range s3cfg.Identities {
+		if userName == ident.Name {
+			for i, cred := range ident.Credentials {
+				if cred.AccessKey == accessKeyId {
+					// TODO: change status of accesskey
+				}
+			}
+		}
+	}
+	return resp
+}
+
 func (iama *IamApiServer) DoActions(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		s3err.WriteErrorResponse(w, r, s3err.ErrInvalidRequest)
@@ -431,6 +448,13 @@ func (iama *IamApiServer) DoActions(w http.ResponseWriter, r *http.Request) {
 	case "DeleteUserPolicy":
 		if response, err = iama.DeleteUserPolicy(s3cfg, values); err != nil {
 			writeIamErrorResponse(w, r, err, "user", values.Get("UserName"), nil)
+		}
+	case "UpdateAccessKey":
+		response, err = iama.UpdateAccessKey(s3cfg, values)
+		if err != nil {
+			glog.Errorf("UpdateAccessKey:  %+v", err)
+			s3err.WriteErrorResponse(w, r, s3err.ErrInvalidRequest)
+			return
 		}
 	default:
 		errNotImplemented := s3err.GetAPIError(s3err.ErrNotImplemented)
