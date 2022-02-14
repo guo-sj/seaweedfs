@@ -3,8 +3,6 @@ package s3api
 import (
 	"fmt"
 	"io"
-	"log"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -229,7 +227,7 @@ func (s3a *S3ApiServer) RedirectPortHandler(w http.ResponseWriter, req *http.Req
 	body, err := io.ReadAll(req.Body)
 	req2, err := http.NewRequest(req.Method, reqUrl, strings.NewReader(string(body)))
 	if err != nil {
-		io.WriteString(w, "Request Error")
+		io.WriteString(w, fmt.Sprintf("failed to make a new http request: %v", err))
 		return
 	}
 	req2.Header = req.Header // get Header of original request
@@ -237,7 +235,7 @@ func (s3a *S3ApiServer) RedirectPortHandler(w http.ResponseWriter, req *http.Req
 	// redirect request
 	rep2, err := cli.Do(req2)
 	if err != nil {
-		io.WriteString(w, "Not Found!")
+		io.WriteString(w, fmt.Sprintf("failed to redirect request: %v", err))
 		return
 	}
 	defer rep2.Body.Close()
@@ -245,7 +243,7 @@ func (s3a *S3ApiServer) RedirectPortHandler(w http.ResponseWriter, req *http.Req
 	// get response
 	repBody, err := io.ReadAll(rep2.Body)
 	if err != nil {
-		io.WriteString(w, "Request Error")
+		io.WriteString(w, fmt.Sprintf("failed to get response: %v", err))
 		return
 	}
 
@@ -253,15 +251,4 @@ func (s3a *S3ApiServer) RedirectPortHandler(w http.ResponseWriter, req *http.Req
 		w.Header().Set(k, v[0])
 	}
 	io.WriteString(w, string(repBody[:]))
-}
-
-// GetOutboundIp returns outbound IP address
-func GetOutboundIp() net.IP {
-	conn, err := net.Dial("udp", "8.8.8.8:80")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer conn.Close()
-	localAddr := conn.LocalAddr().(*net.UDPAddr)
-	return localAddr.IP
 }
