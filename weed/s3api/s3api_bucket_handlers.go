@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"time"
@@ -299,8 +300,37 @@ func (s3a *S3ApiServer) GetBucketLifecycleConfigurationHandler(w http.ResponseWr
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketLifecycleConfiguration.html
 func (s3a *S3ApiServer) PutBucketLifecycleConfigurationHandler(w http.ResponseWriter, r *http.Request) {
 
-	s3err.WriteErrorResponse(w, r, s3err.ErrNotImplemented)
+	// collect parameters
+	bucket, object := xhttp.GetBucketAndObject(r)
 
+	// check bucket
+	if err := s3a.checkBucket(r, bucket); err != s3err.ErrNone {
+		s3err.WriteErrorResponse(w, r, err)
+		return
+	}
+	glog.V(3).Infof("PutBucketLifecycleConfigurationHandler %s, %s", bucket, object)
+
+	// read body
+	/* if err := r.ParseForm(); err != nil {
+		s3err.WriteErrorResponse(w, r, s3err.ErrInvalidRequest)
+		return
+	} */
+	input, err := io.ReadAll(r.Body)
+	if err != nil {
+		glog.Errorf("PutBucketLifecycleConfigurationHandler read input %s: %v", r.URL, err)
+		s3err.WriteErrorResponse(w, r, s3err.ErrInternalError)
+		return
+	}
+
+	lifecycle := &Lifecycle{}
+	if err := xml.Unmarshal(input, lifecycle); err != nil {
+		glog.Errorf("PutBucketLifecycleConfigurationHandler Unmarshal %s: %v", r.URL, err)
+		s3err.WriteErrorResponse(w, r, s3err.ErrMalformedXML)
+		return
+	}
+	glog.V(0).Infof("lifecycle: %v", lifecycle)
+
+	s3err.WriteErrorResponse(w, r, s3err.ErrNotImplemented)
 }
 
 // DeleteBucketMetricsConfiguration Delete Bucket Lifecycle
