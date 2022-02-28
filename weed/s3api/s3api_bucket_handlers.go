@@ -1,10 +1,10 @@
 package s3api
 
 import (
+	"bytes"
 	"context"
 	"encoding/xml"
 	"fmt"
-	"io"
 	"math"
 	"net/http"
 	"time"
@@ -287,7 +287,8 @@ func (s3a *S3ApiServer) GetBucketLifecycleConfigurationHandler(w http.ResponseWr
 		}
 		response.Rules = append(response.Rules, Rule{
 			Status: Enabled, Filter: Filter{
-				Prefix: Prefix{string: prefix, set: true},
+				//Prefix: Prefix{string: prefix, set: true},
+				Prefix: prefix,
 				set:    true,
 			},
 			Expiration: Expiration{Days: days, set: true},

@@ -26,7 +26,6 @@ type Rule struct {
 	ID         string     `xml:"ID,omitempty"`
 	Status     ruleStatus `xml:"Status"`
 	Filter     Filter     `xml:"Filter,omitempty"`
-	Prefix     Prefix     `xml:"Prefix,omitempty"`
 	Expiration Expiration `xml:"Expiration,omitempty"`
 	Transition Transition `xml:"Transition,omitempty"`
 }
@@ -36,7 +35,7 @@ type Filter struct {
 	XMLName xml.Name `xml:"Filter"`
 	set     bool
 
-	Prefix Prefix
+	Prefix string `xml:"Prefix"`
 
 	And    And
 	andSet bool
@@ -59,6 +58,7 @@ func (p Prefix) MarshalXML(e *xml.Encoder, startElement xml.StartElement) error 
 	return e.EncodeElement(p.string, startElement)
 }
 
+// MarshalXML encodes prefix field into an XML form.
 func (f Filter) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
 	if err := e.EncodeToken(start); err != nil {
 		return err
