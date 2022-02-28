@@ -311,27 +311,51 @@ func (s3a *S3ApiServer) PutBucketLifecycleConfigurationHandler(w http.ResponseWr
 	}
 	glog.V(3).Infof("PutBucketLifecycleConfigurationHandler %s, %s", bucket, object)
 
-	// read body
-	/* if err := r.ParseForm(); err != nil {
-		s3err.WriteErrorResponse(w, r, s3err.ErrInvalidRequest)
-		return
-	} */
-	input, err := io.ReadAll(r.Body)
-	if err != nil {
-		glog.Errorf("PutBucketLifecycleConfigurationHandler read input %s: %v", r.URL, err)
-		s3err.WriteErrorResponse(w, r, s3err.ErrInternalError)
-		return
-	}
-
+	// decode xml body
 	lifecycle := &Lifecycle{}
-	if err := xml.Unmarshal(input, lifecycle); err != nil {
+	if err := xml.NewDecoder(r.Body).Decode(lifecycle); err != nil {
 		glog.Errorf("PutBucketLifecycleConfigurationHandler Unmarshal %s: %v", r.URL, err)
 		s3err.WriteErrorResponse(w, r, s3err.ErrMalformedXML)
 		return
 	}
 	glog.V(0).Infof("lifecycle: %v", lifecycle)
 
-	s3err.WriteErrorResponse(w, r, s3err.ErrNotImplemented)
+	fc, err := filer.ReadFilerConf(s3a.option.Filer, s3a.option.GrpcDialOption, nil)
+	if err != nil {
+		glog.Errorf("PutBucketLifecycleConfigurationHandler: %s", err)
+		s3err.WriteErrorResponse(w, r, s3err.ErrInternalError)
+		return
+	}
+
+	bucketPathPrefix := "/buckets/" + bucket + "/"
+	for _, rule := range lifecycle.Rules {
+		if rule.Status == Disabled {
+			continue
+		}
+		var bucketLocation string
+		/* if str := rule.Filter.Prefix; strings.HasPrefix(str, "/") {
+			bucketLocation = bucketPathPrefix + strings.TrimPrefix(str, "/")
+		} else {
+			bucketLocation = bucketPathPrefix + str
+		} */
+		bucketLocation = bucketPathPrefix
+		locConf := &filer_pb.FilerConf_PathConf{LocationPrefix: bucketLocation}
+		if exp := rule.Expiration.Days; exp != 0 {
+			locConf.Ttl = fmt.Sprint(exp) + "d"
+		}
+		glog.V(0).Infof("bucketLocation: %s, expiration: %s", locConf.LocationPrefix, locConf.Ttl)
+		fc.AddLocationConf(locConf)
+	}
+
+	var buf bytes.Buffer
+	fc.ToText(&buf)
+	if err = s3a.WithFilerClient(false, func(client filer_pb.SeaweedFilerClient) error {
+		return filer.SaveInsideFiler(client, filer.DirectoryEtcSeaweedFS, filer.FilerConfName, buf.Bytes())
+	}); err != nil && err != filer_pb.ErrNotFound {
+		s3err.WriteErrorResponse(w, r, s3err.ErrInternalError)
+		return
+	}
+	return
 }
 
 // DeleteBucketMetricsConfiguration Delete Bucket Lifecycle
