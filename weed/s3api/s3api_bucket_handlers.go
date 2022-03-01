@@ -302,14 +302,14 @@ func (s3a *S3ApiServer) GetBucketLifecycleConfigurationHandler(w http.ResponseWr
 func (s3a *S3ApiServer) PutBucketLifecycleConfigurationHandler(w http.ResponseWriter, r *http.Request) {
 
 	// collect parameters
-	bucket, object := xhttp.GetBucketAndObject(r)
+	bucket, _ := xhttp.GetBucketAndObject(r)
 
 	// check bucket
 	if err := s3a.checkBucket(r, bucket); err != s3err.ErrNone {
 		s3err.WriteErrorResponse(w, r, err)
 		return
 	}
-	glog.V(3).Infof("PutBucketLifecycleConfigurationHandler %s, %s", bucket, object)
+	glog.V(3).Infof("PutBucketLifecycleConfigurationHandler %s", bucket)
 
 	// decode xml body
 	lifecycle := &Lifecycle{}
@@ -327,25 +327,7 @@ func (s3a *S3ApiServer) PutBucketLifecycleConfigurationHandler(w http.ResponseWr
 		return
 	}
 
-	bucketPathPrefix := "/buckets/" + bucket + "/"
-	for _, rule := range lifecycle.Rules {
-		if rule.Status == Disabled {
-			continue
-		}
-		var bucketLocation string
-		/* if str := rule.Filter.Prefix; strings.HasPrefix(str, "/") {
-			bucketLocation = bucketPathPrefix + strings.TrimPrefix(str, "/")
-		} else {
-			bucketLocation = bucketPathPrefix + str
-		} */
-		bucketLocation = bucketPathPrefix
-		locConf := &filer_pb.FilerConf_PathConf{LocationPrefix: bucketLocation}
-		if exp := rule.Expiration.Days; exp != 0 {
-			locConf.Ttl = fmt.Sprint(exp) + "d"
-		}
-		glog.V(0).Infof("bucketLocation: %s, expiration: %s", locConf.LocationPrefix, locConf.Ttl)
-		fc.AddLocationConf(locConf)
-	}
+	PutBucketLifecycleRule(bucket, fc, lifecycle.Rules)
 
 	var buf bytes.Buffer
 	fc.ToText(&buf)

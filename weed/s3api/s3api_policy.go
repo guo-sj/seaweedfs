@@ -3,6 +3,9 @@ package s3api
 import (
 	"encoding/xml"
 	"time"
+
+	"github.com/chrislusf/seaweedfs/weed/filer"
+	"github.com/chrislusf/seaweedfs/weed/pb/filer_pb"
 )
 
 // Status represents lifecycle configuration status
@@ -72,7 +75,7 @@ func (f Filter) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
 // And - a tag to combine a prefix and multiple tags for lifecycle configuration rule.
 type And struct {
 	XMLName xml.Name `xml:"And"`
-	Prefix  Prefix   `xml:"Prefix,omitempty"`
+	Prefix  string   `xml:"Prefix,omitempty"`
 	Tags    []Tag    `xml:"Tag,omitempty"`
 }
 
@@ -145,3 +148,53 @@ func (t Transition) MarshalXML(enc *xml.Encoder, start xml.StartElement) error {
 
 // TransitionDays is a type alias to unmarshal Days in Transition
 type TransitionDays int
+
+// GetBucketLifecycleRule return rules of specified bucket
+func GetBucketLifecycleRule(bucket string, fc *filer.FilerConf) (rules []Rule) {
+	return rules
+}
+
+// PutBucketLifecycleRule set rules of specified bucket
+func PutBucketLifecycleRule(bucket string, fc *filer.FilerConf, rules []Rule) {
+	locConf := &filer_pb.FilerConf_PathConf{
+		LocationPrefix: "/buckets/" + bucket + "/",
+		BucketRules:    make([]*filer_pb.FilerConf_PathConf_BucketRule, len(rules)),
+	}
+	for i, rule := range rules {
+		locConf.BucketRules[i] = &filer_pb.FilerConf_PathConf_BucketRule{
+			Id:     rule.ID,
+			Status: string(rule.Status),
+			Filter: &filer_pb.FilerConf_PathConf_Filter{
+				Prefix: rule.Filter.Prefix,
+				And: &filer_pb.FilerConf_PathConf_And{
+					Prefix: rule.Filter.And.Prefix,
+					// Assignment of Tags is done in loop
+				},
+				Tag: &filer_pb.FilerConf_PathConf_Tag{
+					Key:   rule.Filter.Tag.Key,
+					Value: rule.Filter.Tag.Value,
+				},
+			},
+			Expiration: &filer_pb.FilerConf_PathConf_Expiration{
+				Days:         int64(rule.Expiration.Days),
+				Date:         rule.Expiration.Date.String(),
+				DeleteMarker: rule.Expiration.DeleteMarker.val,
+			},
+			Transition: &filer_pb.FilerConf_PathConf_Transition{
+				Days:         int64(rule.Transition.Days),
+				Date:         rule.Transition.Date.String(),
+				StorageClass: rule.Transition.StorageClass,
+			},
+		}
+		locConf.BucketRules[i].Filter.And.Tags = make([]*filer_pb.FilerConf_PathConf_Tag, len(rule.Filter.And.Tags))
+		for j, tag := range rule.Filter.And.Tags {
+			locConf.BucketRules[i].Filter.And.Tags[j] = &filer_pb.FilerConf_PathConf_Tag{
+				Key:   tag.Key,
+				Value: tag.Value,
+			}
+		}
+	}
+
+	fc.AddLocationConf(locConf)
+	return
+}
