@@ -25,12 +25,38 @@ type Lifecycle struct {
 
 // Rule - a rule for lifecycle configuration.
 type Rule struct {
-	XMLName    xml.Name   `xml:"Rule"`
-	ID         string     `xml:"ID,omitempty"`
-	Status     ruleStatus `xml:"Status"`
-	Filter     Filter     `xml:"Filter,omitempty"`
-	Expiration Expiration `xml:"Expiration,omitempty"`
-	Transition Transition `xml:"Transition,omitempty"`
+	XMLName                        xml.Name                       `xml:"Rule"`
+	ID                             string                         `xml:"ID,omitempty"`
+	Status                         ruleStatus                     `xml:"Status"`
+	Filter                         Filter                         `xml:"Filter,omitempty"`
+	Expiration                     Expiration                     `xml:"Expiration,omitempty"`
+	Transition                     []Transition                   `xml:"Transition,omitempty"`
+	AbortIncompleteMultipartUpload AbortIncompleteMultipartUpload `xml:"AbortIncompleteMultipartUpload,omitempty"`
+	NoncurrentVersionExpiration    NoncurrentVersionExpiration    `xml:"NoncurrentVersionExpiration,omitempty"`
+	NoncurrentVersionTransitions   []NoncurrentVersionTransition  `xml:"NoncurrentVersionTransitions,omitempty"`
+}
+
+// AbortIncompleteMultipartUpload - Specifies the days since the initiation of an incomplete
+// multipart upload that Amazon S3 will wait before permanently removing all parts of the
+// upload.
+type AbortIncompleteMultipartUpload struct {
+	XMLName             xml.Name `xml:"AbortIncompleteMultipartUpload"`
+	DaysAfterInitiation int
+}
+
+// NoncurrentVersionExpiration - Specifies when noncurrent object versions expire.
+// Upon expiration, Amazon S3 permanently deletes the noncurrent object versions.
+type NoncurrentVersionExpiration struct {
+	XMLName                 xml.Name `xml:"NoncurrentVersionExpiration"`
+	NewerNoncurrentVersions int
+	NoncurrentDays          int
+}
+
+type NoncurrentVersionTransition struct {
+	XMLName                 xml.Name `xml:"NoncurrentVersionTransition"`
+	NewerNoncurrentVersions int
+	NoncurrentDays          int
+	StorageClass            string `xml:"StorageClass,omitempty"`
 }
 
 // Filter - a filter for a lifecycle configuration Rule.
@@ -176,15 +202,21 @@ func PutBucketLifecycleRule(bucket string, fc *filer.FilerConf, rules []Rule) {
 				},
 			},
 			Expiration: &filer_pb.FilerConf_PathConf_Expiration{
-				Days:         int64(rule.Expiration.Days),
-				Date:         rule.Expiration.Date.String(),
+				Days: int64(rule.Expiration.Days),
+				// Assignment of Date is done below
 				DeleteMarker: rule.Expiration.DeleteMarker.val,
 			},
 			Transition: &filer_pb.FilerConf_PathConf_Transition{
-				Days:         int64(rule.Transition.Days),
-				Date:         rule.Transition.Date.String(),
+				Days: int64(rule.Transition.Days),
+				// Assignment of Date is done below
 				StorageClass: rule.Transition.StorageClass,
 			},
+		}
+		if date := rule.Expiration.Date; !date.IsZero() {
+			locConf.BucketRules[i].Expiration.Date = date.String()
+		}
+		if date := rule.Transition.Date; !date.IsZero() {
+			locConf.BucketRules[i].Transition.Date = date.String()
 		}
 		locConf.BucketRules[i].Filter.And.Tags = make([]*filer_pb.FilerConf_PathConf_Tag, len(rule.Filter.And.Tags))
 		for j, tag := range rule.Filter.And.Tags {
