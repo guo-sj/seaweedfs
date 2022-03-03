@@ -411,12 +411,16 @@ message FilerConf {
         message And {
             string prefix = 1;
             repeated Tag tags = 2;
+            int64 object_size_greater_than = 3;
+            int64 object_size_less_than = 4;
         }
 
         message Filter {
             string prefix = 1;
             And and = 2;
             Tag tag = 3;
+            int64 object_size_greater_than = 4;
+            int64 object_size_less_than = 5;
         }
 
         message Expiration {
@@ -431,12 +435,30 @@ message FilerConf {
             string storage_class = 3;
         }
 
+        message AbortIncompleteMultipartUpload {
+            int64 days_after_initiation = 1;
+        }
+
+        message NoncurrentVersionExpiration {
+            int64 newer_noncurrent_versions = 1;
+            int64 noncurrent_days = 2;
+        }
+
+        message NoncurrentVersionTransition {
+            int64 newer_noncurrent_versions = 1;
+            int64 noncurrent_days = 2;
+            string storage_class = 3;
+        }
+
         message BucketRule {
             string id = 1;
             string status = 2;
             Filter filter = 3;
             Expiration expiration = 4;
-            Transition transition = 5;
+            repeated Transition transition = 5;
+            AbortIncompleteMultipartUpload abort_incomplete_multipart_upload = 6;
+            NoncurrentVersionExpiration noncurrent_version_expiration = 7;
+            repeated NoncurrentVersionTransition noncurrent_version_transition = 8;
         }
 
         repeated BucketRule bucket_rules = 12;

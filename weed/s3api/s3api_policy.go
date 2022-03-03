@@ -2,6 +2,8 @@ package s3api
 
 import (
 	"encoding/xml"
+	"errors"
+	"strings"
 	"time"
 
 	"github.com/chrislusf/seaweedfs/weed/filer"
@@ -33,7 +35,7 @@ type Rule struct {
 	Transition                     []Transition                   `xml:"Transition,omitempty"`
 	AbortIncompleteMultipartUpload AbortIncompleteMultipartUpload `xml:"AbortIncompleteMultipartUpload,omitempty"`
 	NoncurrentVersionExpiration    NoncurrentVersionExpiration    `xml:"NoncurrentVersionExpiration,omitempty"`
-	NoncurrentVersionTransitions   []NoncurrentVersionTransition  `xml:"NoncurrentVersionTransitions,omitempty"`
+	NoncurrentVersionTransition    []NoncurrentVersionTransition  `xml:"NoncurrentVersionTransition,omitempty"`
 }
 
 // AbortIncompleteMultipartUpload - Specifies the days since the initiation of an incomplete
@@ -41,22 +43,22 @@ type Rule struct {
 // upload.
 type AbortIncompleteMultipartUpload struct {
 	XMLName             xml.Name `xml:"AbortIncompleteMultipartUpload"`
-	DaysAfterInitiation int
+	DaysAfterInitiation int64    `xml:"DaysAfterInitiation,omitempty"`
 }
 
 // NoncurrentVersionExpiration - Specifies when noncurrent object versions expire.
 // Upon expiration, Amazon S3 permanently deletes the noncurrent object versions.
 type NoncurrentVersionExpiration struct {
 	XMLName                 xml.Name `xml:"NoncurrentVersionExpiration"`
-	NewerNoncurrentVersions int
-	NoncurrentDays          int
+	NewerNoncurrentVersions int64    `xml:"NewerNoncurrentVersions,omitempty"`
+	NoncurrentDays          int64    `xml:"NoncurrentDays,omitempty"`
 }
 
 type NoncurrentVersionTransition struct {
 	XMLName                 xml.Name `xml:"NoncurrentVersionTransition"`
-	NewerNoncurrentVersions int
-	NoncurrentDays          int
-	StorageClass            string `xml:"StorageClass,omitempty"`
+	NewerNoncurrentVersions int64    `xml:"NewerNoncurrentVersions,omitempty"`
+	NoncurrentDays          int64    `xml:"NoncurrentDays,omitempty"`
+	StorageClass            string   `xml:"StorageClass,omitempty"`
 }
 
 // Filter - a filter for a lifecycle configuration Rule.
@@ -64,13 +66,20 @@ type Filter struct {
 	XMLName xml.Name `xml:"Filter"`
 	set     bool
 
-	Prefix string `xml:"Prefix"`
+	Prefix    string `xml:"Prefix,omitempty"`
+	prefixSet bool
 
-	And    And
+	And    And `xml:"And,omitempty"`
 	andSet bool
 
-	Tag    Tag
+	Tag    Tag `xml:"Tag,omitempty"`
 	tagSet bool
+
+	ObjectSizeGreaterThan    int64 `xml:"ObjectSizeGreaterThan,omitempty"`
+	objectSizeGreaterThanSet bool
+
+	ObjectSizeLessThan    int64 `xml:"ObjectSizeLessThan,omitempty"`
+	objectSizeLessThanSet bool
 }
 
 // Prefix holds the prefix xml tag in <Rule> and <Filter>
@@ -100,9 +109,11 @@ func (f Filter) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
 
 // And - a tag to combine a prefix and multiple tags for lifecycle configuration rule.
 type And struct {
-	XMLName xml.Name `xml:"And"`
-	Prefix  string   `xml:"Prefix,omitempty"`
-	Tags    []Tag    `xml:"Tag,omitempty"`
+	XMLName               xml.Name `xml:"And"`
+	Prefix                string   `xml:"Prefix,omitempty"`
+	Tags                  []Tag    `xml:"Tag,omitempty"`
+	ObjectSizeGreaterThan int      `xml:"ObjectSizeGreaterThan,omitempty"`
+	ObjectSizeLessThan    int      `xml:"ObjectSizeLessThan,omitempty"`
 }
 
 // Expiration - expiration actions for a rule in lifecycle configuration.
@@ -110,7 +121,7 @@ type Expiration struct {
 	XMLName      xml.Name           `xml:"Expiration"`
 	Days         int                `xml:"Days,omitempty"`
 	Date         ExpirationDate     `xml:"Date,omitempty"`
-	DeleteMarker ExpireDeleteMarker `xml:"ExpiredObjectDeleteMarker"`
+	DeleteMarker ExpireDeleteMarker `xml:"ExpiredObjectDeleteMarker,omitempty"`
 
 	set bool
 }
@@ -181,12 +192,21 @@ func GetBucketLifecycleRule(bucket string, fc *filer.FilerConf) (rules []Rule) {
 }
 
 // PutBucketLifecycleRule set rules of specified bucket
-func PutBucketLifecycleRule(bucket string, fc *filer.FilerConf, rules []Rule) {
+func PutBucketLifecycleRule(bucket string, fc *filer.FilerConf, rules []Rule) (err error) {
+	//check number of rules
+	if !checkRulesNumer(rules) {
+		return errors.New(invalidNumber)
+	}
+
 	locConf := &filer_pb.FilerConf_PathConf{
 		LocationPrefix: "/buckets/" + bucket + "/",
 		BucketRules:    make([]*filer_pb.FilerConf_PathConf_BucketRule, len(rules)),
 	}
 	for i, rule := range rules {
+		// check all fields of rule
+		if err = rule.checkRuleFields(); err != nil {
+			return err
+		}
 		locConf.BucketRules[i] = &filer_pb.FilerConf_PathConf_BucketRule{
 			Id:     rule.ID,
 			Status: string(rule.Status),
@@ -229,4 +249,225 @@ func PutBucketLifecycleRule(bucket string, fc *filer.FilerConf, rules []Rule) {
 
 	fc.AddLocationConf(locConf)
 	return
+}
+
+type RuleErrMsg string
+
+// Rule error message
+const (
+	invalidNumer RuleErrMsg = "Invalid number of rule"
+	invalidId    RuleErrMsg = "Invalid id of rule"
+	noAction     RuleErrMsg = "No Actions existing in rule"
+)
+
+func checkRulesNumer(rules []Rule) bool {
+	return len(rules) <= 1000
+}
+
+// checkRuleFields verify that whether all fields of rule are correct
+func (rule *Rule) checkFields() error {
+	// check ID
+	if !rule.checkId() {
+		return errors.New(invalidId)
+	}
+
+	// check Status
+	if !rule.checkStatus() {
+		return errors.New(InvalidStatus)
+	}
+
+	// check Filter
+	if err := rule.checkFilter(); err != nil {
+		return err
+	}
+
+	// check Transitions
+	if err := rule.checkTransitions(); err != nil {
+		return err
+	}
+
+	// check Expiration
+	if err := rule.checkExpiration(); err != nil {
+		return err
+	}
+
+	// check AbortIncompleteMultipartUpload
+	if err := rule.checkAbortIncompleteMultipartUpload(); err != nil {
+		return err
+	}
+
+	// check NoncurrentVersionExpiration
+	if err := rule.checkNoncurrentVersionExpiration(); err != nil {
+		return err
+	}
+
+	// check NoncurrentVersionTransition
+	if err := rule.checkNoncurrentVersionTransition(); err != nil {
+		return err
+	}
+
+	// check action
+	if !rule.checkAction() {
+		return errors.New(NoAction)
+	}
+	return nil
+}
+
+func (rule *Rule) checkId() bool {
+	return len(rule.ID) <= 255
+}
+
+func (rule *Rule) checkStatus() bool {
+	return rule.Status == Enabled || rule.Status == Disabled
+}
+
+func (rule *Rule) checkFilter() error {
+	pf := &rule.Filter
+	return pf.checkFilterFields()
+}
+
+func (rule *Rule) checkTransitions() error {
+	// TODO
+}
+
+func (rule *Rule) checkExpiration() error {
+	// TODO
+}
+
+func (rule *Rule) checkAbortIncompleteMultipartUpload() error {
+	// TODO
+}
+
+func (rule *Rule) checkNoncurrentVersionExpiration() error {
+	// TODO
+}
+
+func (rule *Rule) checkTransitions() error {
+	// TODO
+}
+
+func (rule *Rule) checkAction() error {
+	// TODO
+}
+
+type FilterErrMsg string
+
+// Filter error message
+const (
+	InvalidObjectSize             FilterErrMsg = "Invalid object size"
+	InvalidObjectSizeRelationship FilterErrMsg = "Invalid object relationship"
+	InvalidFieldsCoexist          FilterErrMsg = "Specified more than one element in Filter"
+	InvalidTag                    FilterErrMsg = "Invalid Tag"
+	DuplicateTagKey               FilterErrMsg = "Duplicate Tag Keys"
+)
+
+func (filter *Filter) checkFields() (err error) {
+	if filter.Prefix != "" {
+		filter.prefixSet = true
+		if !strings.HasSuffix(filter.Prefix, "/") {
+			filter.Prefix += "/"
+		}
+	}
+	if err = filter.checkObjectSize(); err != nil {
+		return err
+	}
+	if err = filter.checkTag(); err != nil {
+		return err
+	}
+	if !filter.checkCoexist() {
+		return errors.New(InvalidFieldsCoexist)
+	}
+	if err = filter.checkAnd(); err != nil {
+		return err
+	}
+
+	return err
+}
+
+func (filter *Filter) checkObjectSize() error {
+	sg, sl := filter.ObjectSizeGreaterThan, filter.ObjectSizeLessThan
+	if sg < 0 || sg > 5*1e+6 || sl < 0 || sl > 5*1e+6 {
+		return errors.New(InvalidObjectSize)
+	}
+	if sg > sl {
+		return errors.New(InvalidObjectSizeRelationship)
+	}
+	if sg != 0 {
+		filter.objectSizeGreaterThanSet = true
+	}
+	if sl != 0 {
+		filter.objectSizeLessThanSet = true
+	}
+	return nil
+}
+
+func (filter *Filter) checkTag() error {
+	pt := &filter.Tag
+	if pt.check() {
+		filter.tagSet = true
+	}
+	return nil
+}
+
+func (filter *Filter) checkCoexist() bool {
+	var sum int
+	if filter.prefixSet {
+		sum++
+	}
+	if filter.objectSizeGreaterThanSet {
+		sum++
+	}
+	if filter.objectSizeLessThanSet {
+		sum++
+	}
+	if filter.tagSet {
+		sum++
+	}
+	if filter.andSet {
+		sum++
+	}
+	return sum < 2
+}
+
+func (filter *Filter) checkAnd() error {
+	pa := &filter.And
+	return pa.checkFields()
+}
+
+func (tag *Tag) check() bool {
+	return len(tag.Key) > 0
+}
+
+func (and *And) checkFields() error {
+	if and.Prefix != "" && !strings.HasSuffix(and.Prefix, "/") {
+		and.Prefix += "/"
+	}
+	sg, sl := and.ObjectSizeGreaterThan, and.ObjectSizeLessThan
+	if sg < 0 || sg > 5*1e+6 || sl < 0 || sl > 5*1e+6 {
+		return errors.New(InvalidObjectSize)
+	}
+	if sg > sl {
+		return errors.New(InvalidObjectSizeRelationship)
+	}
+	// TODO
+	var s []string
+	for _, tag := range and.Tags {
+		if tag.check() {
+			if !checkDuplication(s, tag.Key) {
+				s = append(s, tag.Key)
+			} else {
+				return errors.New(DuplicateTagKey)
+			}
+		}
+	}
+	return nil
+}
+
+func checkDuplication(str []string, t string) bool {
+	for _, s := range str {
+		if s == t {
+			return true
+		}
+	}
+	return false
 }
