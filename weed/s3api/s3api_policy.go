@@ -166,10 +166,13 @@ func (eDate ExpirationDate) MarshalXML(e *xml.Encoder, startElement xml.StartEle
 
 // Transition - transition actions for a rule in lifecycle configuration.
 type Transition struct {
-	XMLName      xml.Name  `xml:"Transition"`
-	Days         int       `xml:"Days,omitempty"`
+	XMLName xml.Name `xml:"Transition"`
+	Days    int      `xml:"Days,omitempty"`
+	daysSet bool
+
 	Date         time.Time `xml:"Date,omitempty"`
-	StorageClass string    `xml:"StorageClass,omitempty"`
+	dateSet      bool
+	StorageClass string `xml:"StorageClass,omitempty"`
 
 	set bool
 }
@@ -195,7 +198,7 @@ func GetBucketLifecycleRule(bucket string, fc *filer.FilerConf) (rules []Rule) {
 func PutBucketLifecycleRule(bucket string, fc *filer.FilerConf, rules []Rule) (err error) {
 	//check number of rules
 	if !checkRulesNumer(rules) {
-		return errors.New(invalidNumber)
+		return errors.New(string(InvalidNumber))
 	}
 
 	locConf := &filer_pb.FilerConf_PathConf{
@@ -204,7 +207,7 @@ func PutBucketLifecycleRule(bucket string, fc *filer.FilerConf, rules []Rule) (e
 	}
 	for i, rule := range rules {
 		// check all fields of rule
-		if err = rule.checkRuleFields(); err != nil {
+		if err = rule.checkFields(); err != nil {
 			return err
 		}
 		locConf.BucketRules[i] = &filer_pb.FilerConf_PathConf_BucketRule{
@@ -226,18 +229,18 @@ func PutBucketLifecycleRule(bucket string, fc *filer.FilerConf, rules []Rule) (e
 				// Assignment of Date is done below
 				DeleteMarker: rule.Expiration.DeleteMarker.val,
 			},
-			Transition: &filer_pb.FilerConf_PathConf_Transition{
-				Days: int64(rule.Transition.Days),
-				// Assignment of Date is done below
-				StorageClass: rule.Transition.StorageClass,
-			},
+			//Transition: &filer_pb.FilerConf_PathConf_Transition{
+			//Days: int64(rule.Transition.Days),
+			// Assignment of Date is done below
+			//StorageClass: rule.Transition.StorageClass,
+			//},
 		}
 		if date := rule.Expiration.Date; !date.IsZero() {
 			locConf.BucketRules[i].Expiration.Date = date.String()
 		}
-		if date := rule.Transition.Date; !date.IsZero() {
-			locConf.BucketRules[i].Transition.Date = date.String()
-		}
+		//if date := rule.Transition.Date; !date.IsZero() {
+		//locConf.BucketRules[i].Transition.Date = date.String()
+		//}
 		locConf.BucketRules[i].Filter.And.Tags = make([]*filer_pb.FilerConf_PathConf_Tag, len(rule.Filter.And.Tags))
 		for j, tag := range rule.Filter.And.Tags {
 			locConf.BucketRules[i].Filter.And.Tags[j] = &filer_pb.FilerConf_PathConf_Tag{
@@ -255,9 +258,10 @@ type RuleErrMsg string
 
 // Rule error message
 const (
-	invalidNumer RuleErrMsg = "Invalid number of rule"
-	invalidId    RuleErrMsg = "Invalid id of rule"
-	noAction     RuleErrMsg = "No Actions existing in rule"
+	InvalidNumber RuleErrMsg = "Invalid number of rule"
+	InvalidId     RuleErrMsg = "Invalid id of rule"
+	InvalidStatus RuleErrMsg = "Invalid status of rule"
+	NoAction      RuleErrMsg = "No Actions existing in rule"
 )
 
 func checkRulesNumer(rules []Rule) bool {
@@ -268,12 +272,12 @@ func checkRulesNumer(rules []Rule) bool {
 func (rule *Rule) checkFields() error {
 	// check ID
 	if !rule.checkId() {
-		return errors.New(invalidId)
+		return errors.New(string(InvalidId))
 	}
 
 	// check Status
 	if !rule.checkStatus() {
-		return errors.New(InvalidStatus)
+		return errors.New(string(InvalidStatus))
 	}
 
 	// check Filter
@@ -308,7 +312,7 @@ func (rule *Rule) checkFields() error {
 
 	// check action
 	if !rule.checkAction() {
-		return errors.New(NoAction)
+		return errors.New(string(NoAction))
 	}
 	return nil
 }
@@ -323,31 +327,56 @@ func (rule *Rule) checkStatus() bool {
 
 func (rule *Rule) checkFilter() error {
 	pf := &rule.Filter
-	return pf.checkFilterFields()
+	return pf.checkFields()
 }
 
 func (rule *Rule) checkTransitions() error {
-	// TODO
+	if len(rule.Transition) == 0 {
+		return nil
+	}
+
+	var ppt *Transition // previous pt
+	for i, t := range rule.Transition {
+		pt := &t
+		if err := pt.checkFields(); err != nil {
+			return err
+		} else {
+			// TODO date & days
+			if i > 1 {
+				if !pt.checkTimeFormat(ppt) {
+					return errors.New(string(InconsistentTimeFormat))
+				}
+			}
+			// TODO check storageClass
+		}
+		ppt = pt
+	}
+	return nil
 }
 
 func (rule *Rule) checkExpiration() error {
 	// TODO
+	return nil
 }
 
 func (rule *Rule) checkAbortIncompleteMultipartUpload() error {
 	// TODO
+	return nil
 }
 
 func (rule *Rule) checkNoncurrentVersionExpiration() error {
 	// TODO
+	return nil
 }
 
-func (rule *Rule) checkTransitions() error {
+func (rule *Rule) checkNoncurrentVersionTransition() error {
 	// TODO
+	return nil
 }
 
-func (rule *Rule) checkAction() error {
+func (rule *Rule) checkAction() bool {
 	// TODO
+	return false
 }
 
 type FilterErrMsg string
@@ -359,54 +388,67 @@ const (
 	InvalidFieldsCoexist          FilterErrMsg = "Specified more than one element in Filter"
 	InvalidTag                    FilterErrMsg = "Invalid Tag"
 	DuplicateTagKey               FilterErrMsg = "Duplicate Tag Keys"
+	InvalidAnd                    FilterErrMsg = "And Field must includes more than one element"
 )
 
-func (filter *Filter) checkFields() (err error) {
+func (filter *Filter) checkFields() error {
+	if filter.checkEmpty() {
+		return nil
+	}
+	if !strings.HasSuffix(filter.Prefix, "/") {
+		filter.Prefix += "/"
+	}
+	if err := filter.checkObjectSize(); err != nil {
+		return err
+	}
+	if err := filter.checkAnd(); err != nil {
+		return err
+	}
+	if filter.checkCoexist() {
+		return errors.New(string(InvalidFieldsCoexist))
+	}
+	return nil
+}
+
+func (filter *Filter) checkEmpty() bool {
+	var sum int
 	if filter.Prefix != "" {
 		filter.prefixSet = true
-		if !strings.HasSuffix(filter.Prefix, "/") {
-			filter.Prefix += "/"
-		}
+		sum++
 	}
-	if err = filter.checkObjectSize(); err != nil {
-		return err
+	if pa := &filter.And; !pa.checkEmpty() {
+		filter.andSet = true
+		sum++
 	}
-	if err = filter.checkTag(); err != nil {
-		return err
+	if pt := &filter.Tag; !pt.checkEmpty() {
+		filter.tagSet = true
+		sum++
 	}
-	if !filter.checkCoexist() {
-		return errors.New(InvalidFieldsCoexist)
+	if filter.ObjectSizeGreaterThan != 0 {
+		filter.objectSizeGreaterThanSet = true
+		sum++
 	}
-	if err = filter.checkAnd(); err != nil {
-		return err
+	if filter.ObjectSizeLessThan != 0 {
+		filter.objectSizeLessThanSet = true
+		sum++
 	}
-
-	return err
+	return sum == 0
 }
 
 func (filter *Filter) checkObjectSize() error {
 	sg, sl := filter.ObjectSizeGreaterThan, filter.ObjectSizeLessThan
 	if sg < 0 || sg > 5*1e+6 || sl < 0 || sl > 5*1e+6 {
-		return errors.New(InvalidObjectSize)
+		return errors.New(string(InvalidObjectSize))
 	}
 	if sg > sl {
-		return errors.New(InvalidObjectSizeRelationship)
-	}
-	if sg != 0 {
-		filter.objectSizeGreaterThanSet = true
-	}
-	if sl != 0 {
-		filter.objectSizeLessThanSet = true
+		return errors.New(string(InvalidObjectSizeRelationship))
 	}
 	return nil
 }
 
-func (filter *Filter) checkTag() error {
-	pt := &filter.Tag
-	if pt.check() {
-		filter.tagSet = true
-	}
-	return nil
+func (filter *Filter) checkAnd() error {
+	pa := &filter.And
+	return pa.checkFields()
 }
 
 func (filter *Filter) checkCoexist() bool {
@@ -426,41 +468,65 @@ func (filter *Filter) checkCoexist() bool {
 	if filter.andSet {
 		sum++
 	}
-	return sum < 2
+	return sum > 1
 }
 
-func (filter *Filter) checkAnd() error {
-	pa := &filter.And
-	return pa.checkFields()
-}
-
-func (tag *Tag) check() bool {
+func (tag *Tag) checkEmpty() bool {
 	return len(tag.Key) > 0
 }
 
 func (and *And) checkFields() error {
+	if and.checkEmpty() {
+		return nil
+	}
+	if and.checkNumber() < 2 {
+		return errors.New(string(InvalidAnd))
+	}
 	if and.Prefix != "" && !strings.HasSuffix(and.Prefix, "/") {
 		and.Prefix += "/"
 	}
 	sg, sl := and.ObjectSizeGreaterThan, and.ObjectSizeLessThan
 	if sg < 0 || sg > 5*1e+6 || sl < 0 || sl > 5*1e+6 {
-		return errors.New(InvalidObjectSize)
+		return errors.New(string(InvalidObjectSize))
 	}
 	if sg > sl {
-		return errors.New(InvalidObjectSizeRelationship)
+		return errors.New(string(InvalidObjectSizeRelationship))
 	}
-	// TODO
 	var s []string
 	for _, tag := range and.Tags {
-		if tag.check() {
+		if tag.checkEmpty() {
 			if !checkDuplication(s, tag.Key) {
 				s = append(s, tag.Key)
 			} else {
-				return errors.New(DuplicateTagKey)
+				return errors.New(string(DuplicateTagKey))
 			}
 		}
 	}
 	return nil
+}
+
+func (and *And) checkEmpty() bool {
+	if and.Prefix == "" && and.ObjectSizeGreaterThan == 0 && and.ObjectSizeLessThan == 0 &&
+		len(and.Tags) == 0 {
+		return true
+	}
+	return false
+}
+
+func (and *And) checkNumber() (num int) {
+	if and.Prefix != "" {
+		num++
+	}
+	if and.ObjectSizeGreaterThan > 0 {
+		num++
+	}
+	if and.ObjectSizeLessThan > 0 {
+		num++
+	}
+	if len(and.Tags) > 0 {
+		num++
+	}
+	return num
 }
 
 func checkDuplication(str []string, t string) bool {
@@ -470,4 +536,38 @@ func checkDuplication(str []string, t string) bool {
 		}
 	}
 	return false
+}
+
+type TransitionErrMsg string
+
+// Transition error message
+const (
+	InvalidElements        TransitionErrMsg = "Invalid elements in Transition action "
+	InconsistentTimeFormat TransitionErrMsg = "Mixed Date and Days in Transition action"
+)
+
+func (transition *Transition) checkFields() error {
+	if !transition.checkElements() {
+		return errors.New(string(InvalidElements))
+	}
+	// TODO
+	return nil
+}
+
+func (transition *Transition) checkElements() bool {
+	if transition.StorageClass != "" {
+		if !transition.Date.IsZero() && transition.Days == 0 {
+			transition.dateSet = true
+			return true
+		}
+		if transition.Days != 0 && transition.Date.IsZero() {
+			transition.daysSet = true
+			return true
+		}
+	}
+	return false
+}
+
+func (transition *Transition) checkTimeFormat(pt *Transition) bool {
+	return transition.dateSet == pt.dateSet && transition.daysSet == pt.daysSet
 }
