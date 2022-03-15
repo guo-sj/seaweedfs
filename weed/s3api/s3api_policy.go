@@ -109,11 +109,15 @@ func (f Filter) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
 
 // And - a tag to combine a prefix and multiple tags for lifecycle configuration rule.
 type And struct {
-	XMLName               xml.Name `xml:"And"`
-	Prefix                string   `xml:"Prefix,omitempty"`
-	Tags                  []Tag    `xml:"Tag,omitempty"`
-	ObjectSizeGreaterThan int      `xml:"ObjectSizeGreaterThan,omitempty"`
-	ObjectSizeLessThan    int      `xml:"ObjectSizeLessThan,omitempty"`
+	XMLName                  xml.Name `xml:"And"`
+	Prefix                   string   `xml:"Prefix,omitempty"`
+	prefixSet                bool
+	Tags                     []Tag `xml:"Tag,omitempty"`
+	tagsSet                  bool
+	ObjectSizeGreaterThan    int `xml:"ObjectSizeGreaterThan,omitempty"`
+	objectSizeGreaterThanset bool
+	ObjectSizeLessThan       int `xml:"ObjectSizeLessThan,omitempty"`
+	objectSizeLessThanset    bool
 }
 
 // Expiration - expiration actions for a rule in lifecycle configuration.
@@ -208,12 +212,13 @@ func PutBucketLifecycleRule(bucket string, fc *filer.FilerConf, rules []Rule) (e
 		LocationPrefix: "/buckets/" + bucket + "/",
 		BucketRules:    make([]*filer_pb.FilerConf_PathConf_BucketRule, len(rules)),
 	}
-	for i, rule := range rules {
+	for _, rule := range rules {
+		fp := &filer_pb.FilerConf_PathConf_BucketRule{}
 		// check all fields of rule
-		if err = rule.checkFields(); err != nil {
+		if err = rule.checkFields(fp); err != nil {
 			return err
 		}
-		locConf.BucketRules[i] = &filer_pb.FilerConf_PathConf_BucketRule{
+		/* locConf.BucketRules[i] = &filer_pb.FilerConf_PathConf_BucketRule{
 			Id:     rule.ID,
 			Status: string(rule.Status),
 			Filter: &filer_pb.FilerConf_PathConf_Filter{
@@ -250,7 +255,7 @@ func PutBucketLifecycleRule(bucket string, fc *filer.FilerConf, rules []Rule) (e
 				Key:   tag.Key,
 				Value: tag.Value,
 			}
-		}
+		} */
 	}
 
 	fc.AddLocationConf(locConf)
@@ -273,45 +278,63 @@ func checkRulesNumer(rules []Rule) bool {
 }
 
 // checkRuleFields verify that whether all fields of rule are correct
-func (r Rule) checkFields() error {
+func (r Rule) checkFields(fc *filer_pb.FilerConf_PathConf_BucketRule) error {
 	// check ID
 	if !r.checkId() {
 		return errors.New(string(InvalidId))
+	} else {
+		fc.Id = r.ID
 	}
 
 	// check Status
 	if !r.checkStatus() {
 		return errors.New(string(InvalidStatus))
+	} else {
+		fc.Status = string(r.Status)
 	}
 
 	// check Filter
 	if err := r.checkFilter(); err != nil {
 		return err
+	} else {
+		fc.Filter = &filer_pb.FilerConf_PathConf_Filter{}
+		r.setFilter(fc.Filter)
 	}
 
 	// check Transitions
 	if err := r.checkTransitions(); err != nil {
 		return err
+	} else {
+		// NOTE: Transitions are not implemented
 	}
 
 	// check Expiration
 	if err := r.checkExpiration(); err != nil {
 		return err
+	} else {
+		fc.Expiration = &filer_pb.FilerConf_PathConf_Expiration{}
+		r.setExpiration(fc.Expiration)
 	}
 
 	// check AbortIncompleteMultipartUpload
 	if err := r.checkAbortIncompleteMultipartUpload(); err != nil {
 		return err
+	} else {
+		// NOTE: AbortIncompleteMultipartUpload is not implemented
 	}
 
 	// check NoncurrentVersionExpiration
 	if err := r.checkNoncurrentVersionExpiration(); err != nil {
 		return err
+	} else {
+		// NOTE: NoncurrentVersionExpiration is not implemented
 	}
 
 	// check NoncurrentVersionTransition
 	if err := r.checkNoncurrentVersionTransition(); err != nil {
 		return err
+	} else {
+		// NOTE: NoncurrentVersionTransition is not implemented
 	}
 
 	// check action
@@ -332,6 +355,29 @@ func (r Rule) checkStatus() bool {
 func (r Rule) checkFilter() error {
 	pf := &r.Filter
 	return pf.checkFields()
+}
+
+func (r Rule) setFilter(fcf *filer_pb.FilerConf_PathConf_Filter) {
+	f := r.Filter
+	if f.prefixSet {
+		fcf.Prefix = f.Prefix
+	}
+	if f.andSet {
+		fcf.And = &filer_pb.FilerConf_PathConf_And{}
+		f.setAnd(fcf.And)
+	}
+	if f.tagSet {
+		fcf.Tag = &filer_pb.FilerConf_PathConf_Tag{
+			Key:   f.Tag.Key,
+			Value: f.Tag.Value,
+		}
+	}
+	if f.objectSizeGreaterThanSet {
+		fcf.ObjectSizeGreaterThan = f.ObjectSizeGreaterThan
+	}
+	if f.objectSizeLessThanSet {
+		fcf.ObjectSizeLessThan = f.ObjectSizeLessThan
+	}
 }
 
 func (r Rule) checkTransitions() error {
@@ -362,6 +408,16 @@ func (r Rule) checkTransitions() error {
 
 func (r Rule) checkExpiration() error {
 	return r.Expiration.checkFields()
+}
+
+func (r Rule) setExpiration(fce *filer_pb.FilerConf_PathConf_Expiration) {
+	if r.Expiration.dateSet {
+		fce.Date = r.Expiration.Date.String()
+	} else if r.Expiration.daysSet {
+		fce.Days = int64(r.Expiration.Days)
+	} else if r.Expiration.deleteMarkerSet {
+		fce.DeleteMarker = r.Expiration.DeleteMarker
+	}
 }
 
 func (r Rule) checkAbortIncompleteMultipartUpload() error {
@@ -426,18 +482,23 @@ func (f Filter) checkFields() error {
 func (f Filter) checkCoexist() error {
 	var sum int
 	if f.Prefix != "" {
+		f.prefixSet = true
 		sum++
 	}
-	if !f.And.checkEmpty() {
+	if f.And.checkNumber() == 0 {
+		f.andSet = true
 		sum++
 	}
 	if !f.Tag.checkEmpty() {
+		f.tagSet = true
 		sum++
 	}
 	if f.ObjectSizeGreaterThan != 0 {
+		f.objectSizeGreaterThanSet = true
 		sum++
 	}
 	if f.ObjectSizeLessThan != 0 {
+		f.objectSizeLessThanSet = true
 		sum++
 	}
 	if sum > 1 {
@@ -459,7 +520,27 @@ func (f Filter) checkObjectSize() error {
 }
 
 func (f Filter) checkAnd() error {
-	return f.checkFields()
+	return f.And.checkFields()
+}
+
+func (f Filter) setAnd(fca *filer_pb.FilerConf_PathConf_And) {
+	fa := f.And
+	if fa.prefixSet {
+		fca.Prefix = fa.Prefix
+	}
+	if fa.objectSizeGreaterThanset {
+		fca.ObjectSizeGreaterThan = int64(fa.ObjectSizeGreaterThan)
+	}
+	if fa.objectSizeLessThanset {
+		fca.ObjectSizeLessThan = int64(fa.ObjectSizeLessThan)
+	}
+	if fa.tagsSet {
+		fca.Tags = make([]*filer_pb.FilerConf_PathConf_Tag, len(fa.Tags))
+		for i := 0; i < len(fa.Tags); i++ {
+			fca.Tags[i].Key = fa.Tags[i].Key
+			fca.Tags[i].Value = fa.Tags[i].Value
+		}
+	}
 }
 
 func (t Tag) checkEmpty() bool {
@@ -467,14 +548,11 @@ func (t Tag) checkEmpty() bool {
 }
 
 func (a And) checkFields() error {
-	if a.checkEmpty() {
-		return nil
-	}
-	if a.checkNumber() < 2 {
+	if a.checkNumber() == 1 {
 		return errors.New(string(InvalidAnd))
 	}
 	if a.Prefix != "" && !strings.HasSuffix(a.Prefix, "/") {
-		a.Prefix += "/"
+		return errors.New(string(InvalidPrefix))
 	}
 	sg, sl := a.ObjectSizeGreaterThan, a.ObjectSizeLessThan
 	if sg < 0 || sg > 5*1e+6 || sl < 0 || sl > 5*1e+6 {
@@ -496,26 +574,22 @@ func (a And) checkFields() error {
 	return nil
 }
 
-func (a And) checkEmpty() bool {
-	if a.Prefix == "" && a.ObjectSizeGreaterThan == 0 && a.ObjectSizeLessThan == 0 &&
-		len(a.Tags) == 0 {
-		return true
-	}
-	return false
-}
-
 func (a And) checkNumber() (num int) {
 	if a.Prefix != "" {
 		num++
+		a.prefixSet = true
 	}
 	if a.ObjectSizeGreaterThan > 0 {
 		num++
+		a.objectSizeGreaterThanset = true
 	}
 	if a.ObjectSizeLessThan > 0 {
 		num++
+		a.objectSizeLessThanset = true
 	}
 	if len(a.Tags) > 0 {
 		num++
+		a.tagsSet = true
 	}
 	return num
 }
