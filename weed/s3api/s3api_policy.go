@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/chrislusf/seaweedfs/weed/filer"
+	"github.com/chrislusf/seaweedfs/weed/glog"
 	"github.com/chrislusf/seaweedfs/weed/pb/filer_pb"
 )
 
@@ -97,7 +98,7 @@ func (p Prefix) MarshalXML(e *xml.Encoder, startElement xml.StartElement) error 
 }
 
 // MarshalXML encodes prefix field into an XML form.
-func (f Filter) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
+func (f *Filter) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
 	if err := e.EncodeToken(start); err != nil {
 		return err
 	}
@@ -134,12 +135,12 @@ type Expiration struct {
 }
 
 // MarshalXML encodes expiration field into an XML form.
-func (e Expiration) MarshalXML(enc *xml.Encoder, startElement xml.StartElement) error {
+func (e *Expiration) MarshalXML(enc *xml.Encoder, startElement xml.StartElement) error {
 	if !e.set {
 		return nil
 	}
 	type expirationWrapper Expiration
-	return enc.EncodeElement(expirationWrapper(e), startElement)
+	return enc.EncodeElement(expirationWrapper(*e), startElement)
 }
 
 // ExpireDeleteMarker represents value of ExpiredObjectDeleteMarker field in Expiration XML element.
@@ -185,12 +186,12 @@ type Transition struct {
 }
 
 // MarshalXML encodes transition field into an XML form.
-func (t Transition) MarshalXML(enc *xml.Encoder, start xml.StartElement) error {
+func (t *Transition) MarshalXML(enc *xml.Encoder, start xml.StartElement) error {
 	if !t.set {
 		return nil
 	}
 	type transitionWrapper Transition
-	return enc.EncodeElement(transitionWrapper(t), start)
+	return enc.EncodeElement(transitionWrapper(*t), start)
 }
 
 // TransitionDays is a type alias to unmarshal Days in Transition
@@ -202,7 +203,7 @@ func GetBucketLifecycleRule(bucket string, fc *filer.FilerConf) (rules []Rule) {
 }
 
 // PutBucketLifecycleRule set rules of specified bucket
-func PutBucketLifecycleRule(bucket string, fc *filer.FilerConf, rules []Rule) (err error) {
+func PutBucketLifecycleRule(bucket string, fc *filer.FilerConf, rules []Rule) error {
 	//check number of rules
 	if !checkRulesNumer(rules) {
 		return errors.New(string(InvalidNumber))
@@ -212,12 +213,14 @@ func PutBucketLifecycleRule(bucket string, fc *filer.FilerConf, rules []Rule) (e
 		LocationPrefix: "/buckets/" + bucket + "/",
 		BucketRules:    make([]*filer_pb.FilerConf_PathConf_BucketRule, len(rules)),
 	}
-	for _, rule := range rules {
+	for i, rule := range rules {
 		fp := &filer_pb.FilerConf_PathConf_BucketRule{}
-		// check all fields of rule
-		if err = rule.checkFields(fp); err != nil {
+		// check all fields of rule and assign them
+		if err := rule.checkFields(fp); err != nil {
 			return err
 		}
+		glog.V(0).Infof("*fp: %v", *fp)
+		locConf.BucketRules[i] = fp
 		/* locConf.BucketRules[i] = &filer_pb.FilerConf_PathConf_BucketRule{
 			Id:     rule.ID,
 			Status: string(rule.Status),
@@ -259,7 +262,7 @@ func PutBucketLifecycleRule(bucket string, fc *filer.FilerConf, rules []Rule) (e
 	}
 
 	fc.AddLocationConf(locConf)
-	return
+	return nil
 }
 
 type RuleErrMsg string
@@ -278,7 +281,7 @@ func checkRulesNumer(rules []Rule) bool {
 }
 
 // checkRuleFields verify that whether all fields of rule are correct
-func (r Rule) checkFields(fc *filer_pb.FilerConf_PathConf_BucketRule) error {
+func (r *Rule) checkFields(fc *filer_pb.FilerConf_PathConf_BucketRule) error {
 	// check ID
 	if !r.checkId() {
 		return errors.New(string(InvalidId))
@@ -344,20 +347,20 @@ func (r Rule) checkFields(fc *filer_pb.FilerConf_PathConf_BucketRule) error {
 	return nil
 }
 
-func (r Rule) checkId() bool {
+func (r *Rule) checkId() bool {
 	return len(r.ID) <= 255
 }
 
-func (r Rule) checkStatus() bool {
+func (r *Rule) checkStatus() bool {
 	return r.Status == Enabled || r.Status == Disabled
 }
 
-func (r Rule) checkFilter() error {
+func (r *Rule) checkFilter() error {
 	pf := &r.Filter
 	return pf.checkFields()
 }
 
-func (r Rule) setFilter(fcf *filer_pb.FilerConf_PathConf_Filter) {
+func (r *Rule) setFilter(fcf *filer_pb.FilerConf_PathConf_Filter) {
 	f := r.Filter
 	if f.prefixSet {
 		fcf.Prefix = f.Prefix
@@ -380,7 +383,7 @@ func (r Rule) setFilter(fcf *filer_pb.FilerConf_PathConf_Filter) {
 	}
 }
 
-func (r Rule) checkTransitions() error {
+func (r *Rule) checkTransitions() error {
 	if len(r.Transition) == 0 {
 		return nil
 	} else {
@@ -406,11 +409,12 @@ func (r Rule) checkTransitions() error {
 	//return nil
 }
 
-func (r Rule) checkExpiration() error {
-	return r.Expiration.checkFields()
+func (r *Rule) checkExpiration() error {
+	pe := &r.Expiration
+	return pe.checkFields()
 }
 
-func (r Rule) setExpiration(fce *filer_pb.FilerConf_PathConf_Expiration) {
+func (r *Rule) setExpiration(fce *filer_pb.FilerConf_PathConf_Expiration) {
 	if r.Expiration.dateSet {
 		fce.Date = r.Expiration.Date.String()
 	} else if r.Expiration.daysSet {
@@ -420,7 +424,7 @@ func (r Rule) setExpiration(fce *filer_pb.FilerConf_PathConf_Expiration) {
 	}
 }
 
-func (r Rule) checkAbortIncompleteMultipartUpload() error {
+func (r *Rule) checkAbortIncompleteMultipartUpload() error {
 	if r.AbortIncompleteMultipartUpload.DaysAfterInitiation == 0 {
 		return nil
 	} else {
@@ -428,7 +432,7 @@ func (r Rule) checkAbortIncompleteMultipartUpload() error {
 	}
 }
 
-func (r Rule) checkNoncurrentVersionExpiration() error {
+func (r *Rule) checkNoncurrentVersionExpiration() error {
 	if r.NoncurrentVersionExpiration.checkEmpty() {
 		return nil
 	} else {
@@ -436,7 +440,7 @@ func (r Rule) checkNoncurrentVersionExpiration() error {
 	}
 }
 
-func (r Rule) checkNoncurrentVersionTransition() error {
+func (r *Rule) checkNoncurrentVersionTransition() error {
 	if len(r.NoncurrentVersionTransition) == 0 {
 		return nil
 	} else {
@@ -444,7 +448,7 @@ func (r Rule) checkNoncurrentVersionTransition() error {
 	}
 }
 
-func (r Rule) checkAction() bool {
+func (r *Rule) checkAction() bool {
 	// TODO: It should use 'return r.Expiration.set || r.Transition.set' if Transition field
 	// is implemented
 	return r.Expiration.set
@@ -463,7 +467,7 @@ const (
 	InvalidAnd                    FilterErrMsg = "And Field must includes more than one element"
 )
 
-func (f Filter) checkFields() error {
+func (f *Filter) checkFields() error {
 	if err := f.checkCoexist(); err != nil {
 		return err
 	}
@@ -479,13 +483,13 @@ func (f Filter) checkFields() error {
 	return nil
 }
 
-func (f Filter) checkCoexist() error {
+func (f *Filter) checkCoexist() error {
 	var sum int
 	if f.Prefix != "" {
 		f.prefixSet = true
 		sum++
 	}
-	if f.And.checkNumber() == 0 {
+	if f.And.checkNumber() != 0 {
 		f.andSet = true
 		sum++
 	}
@@ -508,7 +512,7 @@ func (f Filter) checkCoexist() error {
 	}
 }
 
-func (f Filter) checkObjectSize() error {
+func (f *Filter) checkObjectSize() error {
 	sg, sl := f.ObjectSizeGreaterThan, f.ObjectSizeLessThan
 	if sg < 0 || sg > 5*1e+6 || sl < 0 || sl > 5*1e+6 {
 		return errors.New(string(InvalidObjectSize))
@@ -519,11 +523,12 @@ func (f Filter) checkObjectSize() error {
 	return nil
 }
 
-func (f Filter) checkAnd() error {
-	return f.And.checkFields()
+func (f *Filter) checkAnd() error {
+	pa := &f.And
+	return pa.checkFields()
 }
 
-func (f Filter) setAnd(fca *filer_pb.FilerConf_PathConf_And) {
+func (f *Filter) setAnd(fca *filer_pb.FilerConf_PathConf_And) {
 	fa := f.And
 	if fa.prefixSet {
 		fca.Prefix = fa.Prefix
@@ -544,10 +549,10 @@ func (f Filter) setAnd(fca *filer_pb.FilerConf_PathConf_And) {
 }
 
 func (t Tag) checkEmpty() bool {
-	return len(t.Key) > 0
+	return len(t.Key) == 0
 }
 
-func (a And) checkFields() error {
+func (a *And) checkFields() error {
 	if a.checkNumber() == 1 {
 		return errors.New(string(InvalidAnd))
 	}
@@ -574,7 +579,7 @@ func (a And) checkFields() error {
 	return nil
 }
 
-func (a And) checkNumber() (num int) {
+func (a *And) checkNumber() (num int) {
 	if a.Prefix != "" {
 		num++
 		a.prefixSet = true
@@ -611,7 +616,7 @@ const (
 	InconsistentTimeFormat TransitionErrMsg = "Mixed Date and Days in Transition action"
 )
 
-func (t Transition) checkFields() error {
+func (t *Transition) checkFields() error {
 	if !t.checkElements() {
 		return errors.New(string(InvalidElements))
 	}
@@ -619,7 +624,7 @@ func (t Transition) checkFields() error {
 	return nil
 }
 
-func (t Transition) checkElements() bool {
+func (t *Transition) checkElements() bool {
 	if t.StorageClass != "" {
 		if !t.Date.IsZero() && t.Days == 0 {
 			t.dateSet = true
@@ -633,7 +638,7 @@ func (t Transition) checkElements() bool {
 	return false
 }
 
-func (t Transition) checkTimeFormat(pt Transition) bool {
+func (t *Transition) checkTimeFormat(pt Transition) bool {
 	return t.dateSet == pt.dateSet && t.daysSet == pt.daysSet
 }
 
@@ -649,14 +654,14 @@ const (
 	CoexistElementsError ExpirationErrMsg = "Date, Days and DeleteMarker can't specified together"
 )
 
-func (e Expiration) checkFields() error {
+func (e *Expiration) checkFields() error {
 	if err := e.checkCoexist(); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (e Expiration) checkCoexist() error {
+func (e *Expiration) checkCoexist() error {
 	sum := 0
 	if e.Days != 0 {
 		e.daysSet = true

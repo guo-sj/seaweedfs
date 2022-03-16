@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -327,7 +328,16 @@ func (s3a *S3ApiServer) PutBucketLifecycleConfigurationHandler(w http.ResponseWr
 		return
 	}
 
-	PutBucketLifecycleRule(bucket, fc, lifecycle.Rules)
+	err = PutBucketLifecycleRule(bucket, fc, lifecycle.Rules)
+	if err == errors.New(string(NotImplemet)) {
+		glog.Errorf("PutBucketLifecycleConfigurationHandler: %s", err)
+		s3err.WriteErrorResponse(w, r, s3err.ErrNotImplemented)
+		return
+	} else if err != nil {
+		glog.Errorf("PutBucketLifecycleConfigurationHandler: %s", err)
+		s3err.WriteErrorResponse(w, r, s3err.ErrInternalError)
+		return
+	}
 
 	var buf bytes.Buffer
 	fc.ToText(&buf)
