@@ -33,7 +33,7 @@ Your support will be really appreciated by me and other supporters!
 
 
 ### Gold Sponsors
-![shuguang](https://raw.githubusercontent.com/chrislusf/seaweedfs/master/note/shuguang.png)
+- [![nodion](https://www.nodion.com/img/logo.svg)](https://www.nodion.com)
 
 ---
 
@@ -52,6 +52,9 @@ Table of Contents
 =================
 
 * [Quick Start](#quick-start)
+    * [Quick Start for S3 API on Docker](#quick-start-for-s3-api-on-docker)
+    * [Quick Start with Single Binary](#quick-start-with-single-binary)
+    * [Quick Start SeaweedFS S3 on AWS](#quick-start-seaweedfs-s3-on-aws)
 * [Introduction](#introduction)
 * [Features](#features)
     * [Additional Features](#additional-features)
@@ -74,11 +77,14 @@ Table of Contents
 
 `docker run -p 8333:8333 chrislusf/seaweedfs server -s3`
 
-## Quick Start with single binary ##
+## Quick Start with Single Binary ##
 * Download the latest binary from https://github.com/chrislusf/seaweedfs/releases and unzip a single binary file `weed` or `weed.exe`
 * Run `weed server -dir=/some/data/dir -s3` to start one master, one volume server, one filer, and one S3 gateway.
 
 Also, to increase capacity, just add more volume servers by running `weed volume -dir="/some/data/dir2" -mserver="<master_host>:9333" -port=8081` locally, or on a different machine, or on thousands of machines. That is it!
+
+## Quick Start SeaweedFS S3 on AWS ##
+* Setup fast production-ready [SeaweedFS S3 on AWS with cloudformation](https://aws.amazon.com/marketplace/pp/prodview-nzelz5gprlrjc)
 
 ## Introduction ##
 
