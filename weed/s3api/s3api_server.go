@@ -6,13 +6,13 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/chrislusf/seaweedfs/weed/filer"
 	"github.com/chrislusf/seaweedfs/weed/pb/s3_pb"
 
-	"github.com/chrislusf/seaweedfs/weed/filer"
 	"github.com/chrislusf/seaweedfs/weed/glog"
 	"github.com/chrislusf/seaweedfs/weed/pb"
 	. "github.com/chrislusf/seaweedfs/weed/s3api/s3_constants"
@@ -230,8 +230,27 @@ func (s3a *S3ApiServer) registerRouter(router *mux.Router) {
 	// ListBuckets
 	apiRouter.Methods("GET").Path("/").HandlerFunc(track(s3a.ListBucketsHandler, "LIST"))
 
-	// Redirect port 29000 to 8111
-	apiRouter.Methods("POST").Path("/").HandlerFunc(s3a.RedirectPortHandler)
+	// Redirect iam request from port 29000 to 8111
+	apiRouter.Methods("POST").Path("/").MatcherFunc(func(r *http.Request, rm *mux.RouteMatch) bool {
+		// verify whether the request type is "iam" or "s3". For a typical Authorization:
+		// "AWS4-HMAC-SHA256 Credential=197FSAQ7HHTA48X64O3A/20220420/test1/iam/aws4_request, SignedHeaders=content-type;
+		// host;x-amz-date, Signature=6757dc6b3d7534d67e17842760310e99ee695408497f6edc4fdb84770c252dc8",
+		// the request type is "iam"
+		s := strings.Split(r.Header["Authorization"][0], "Credential=")
+		if len(s) < 2 {
+			return false
+		}
+		s = strings.Split(s[1], ",")
+		if len(s) < 2 {
+			return false
+		}
+		s = strings.Split(s[0], "/")
+		if len(s) < 5 {
+			return false
+		}
+		return s[3] == "iam"
+	}).HandlerFunc(s3a.RedirectPortHandler)
+
 	// NotFound
 	apiRouter.NotFoundHandler = http.HandlerFunc(s3err.NotFoundHandler)
 
@@ -243,7 +262,7 @@ func (s3a *S3ApiServer) RedirectPortHandler(w http.ResponseWriter, req *http.Req
 
 	// get new url
 	cli := &http.Client{}
-	reqUrl := "http://" + strings.TrimRight(req.Host, "29000") + "8111" + req.URL.Path
+	reqUrl := "http://" + strings.TrimRight(req.Host, strconv.Itoa(s3a.option.Port)) + "8111" + req.URL.Path
 	if len(req.URL.RawQuery) > 0 {
 		reqUrl += "?" + req.URL.RawQuery
 	}
@@ -271,6 +290,9 @@ func (s3a *S3ApiServer) RedirectPortHandler(w http.ResponseWriter, req *http.Req
 		io.WriteString(w, fmt.Sprintf("failed to get response: %v", err))
 		return
 	}
+
+	// get status code
+	w.WriteHeader(rep2.StatusCode)
 
 	for k, v := range rep2.Header {
 		w.Header().Set(k, v[0])
