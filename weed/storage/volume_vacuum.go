@@ -116,7 +116,8 @@ func (v *Volume) CommitCompact() error {
 	stats.VolumeServerVolumeCounter.WithLabelValues(v.Collection, "volume").Dec()
 
 	var e error
-	if e = v.makeupDiff(v.FileName(".cpd"), v.FileName(".cpx"), v.FileName(".dat"), v.FileName(".idx")); e != nil {
+	var newIdxOffset uint64
+	if newIdxOffset, e = v.makeupDiff(v.FileName(".cpd"), v.FileName(".cpx"), v.FileName(".dat"), v.FileName(".idx")); e != nil {
 		glog.V(0).Infof("makeupDiff in CommitCompact volume %d failed %v", v.Id, e)
 		e = os.Remove(v.FileName(".cpd"))
 		if e != nil {
@@ -152,7 +153,7 @@ func (v *Volume) CommitCompact() error {
 	os.RemoveAll(v.FileName(".ldb"))
 
 	glog.V(3).Infof("Loading volume %d commit file...", v.Id)
-	if e = v.load(true, false, v.needleMapKind, 0); e != nil {
+	if e = v.load(true, false, v.needleMapKind, 0, newIdxOffset); e != nil {
 		return e
 	}
 	return nil
@@ -181,37 +182,37 @@ func fetchCompactRevisionFromDatFile(datBackend backend.BackendStorageFile) (com
 }
 
 // if old .dat and .idx files are updated, this func tries to apply the same changes to new files accordingly
-func (v *Volume) makeupDiff(newDatFileName, newIdxFileName, oldDatFileName, oldIdxFileName string) (err error) {
+func (v *Volume) makeupDiff(newDatFileName, newIdxFileName, oldDatFileName, oldIdxFileName string) (idxOffset uint64, err error) {
 	var indexSize int64
 
 	oldIdxFile, err := os.Open(oldIdxFileName)
 	if err != nil {
-		return fmt.Errorf("makeupDiff open %s failed: %v", oldIdxFileName, err)
+		return idxOffset, fmt.Errorf("makeupDiff open %s failed: %v", oldIdxFileName, err)
 	}
 	defer oldIdxFile.Close()
 
 	oldDatFile, err := os.Open(oldDatFileName)
 	if err != nil {
-		return fmt.Errorf("makeupDiff open %s failed: %v", oldDatFileName, err)
+		return idxOffset, fmt.Errorf("makeupDiff open %s failed: %v", oldDatFileName, err)
 	}
 	oldDatBackend := backend.NewDiskFile(oldDatFile)
 	defer oldDatBackend.Close()
 
 	// skip if the old .idx file has not changed
 	if indexSize, err = verifyIndexFileIntegrity(oldIdxFile); err != nil {
-		return fmt.Errorf("verifyIndexFileIntegrity %s failed: %v", oldIdxFileName, err)
+		return idxOffset, fmt.Errorf("verifyIndexFileIntegrity %s failed: %v", oldIdxFileName, err)
 	}
 	if indexSize == 0 || uint64(indexSize) <= v.lastCompactIndexOffset {
-		return nil
+		return idxOffset, nil
 	}
 
 	// fail if the old .dat file has changed to a new revision
 	oldDatCompactRevision, err := fetchCompactRevisionFromDatFile(oldDatBackend)
 	if err != nil {
-		return fmt.Errorf("fetchCompactRevisionFromDatFile src %s failed: %v", oldDatFile.Name(), err)
+		return idxOffset, fmt.Errorf("fetchCompactRevisionFromDatFile src %s failed: %v", oldDatFile.Name(), err)
 	}
 	if oldDatCompactRevision != v.lastCompactRevision {
-		return fmt.Errorf("current old dat file's compact revision %d is not the expected one %d", oldDatCompactRevision, v.lastCompactRevision)
+		return idxOffset, fmt.Errorf("current old dat file's compact revision %d is not the expected one %d", oldDatCompactRevision, v.lastCompactRevision)
 	}
 
 	type keyField struct {
@@ -220,10 +221,10 @@ func (v *Volume) makeupDiff(newDatFileName, newIdxFileName, oldDatFileName, oldI
 	}
 	incrementedHasUpdatedIndexEntry := make(map[NeedleId]keyField)
 
-	for idxOffset := indexSize - NeedleMapEntrySize; uint64(idxOffset) >= v.lastCompactIndexOffset; idxOffset -= NeedleMapEntrySize {
+	for idxOffset = uint64(indexSize - NeedleMapEntrySize); uint64(idxOffset) >= v.lastCompactIndexOffset; idxOffset -= NeedleMapEntrySize {
 		var IdxEntry []byte
-		if IdxEntry, err = readIndexEntryAtOffset(oldIdxFile, idxOffset); err != nil {
-			return fmt.Errorf("readIndexEntry %s at offset %d failed: %v", oldIdxFileName, idxOffset, err)
+		if IdxEntry, err = readIndexEntryAtOffset(oldIdxFile, int64(idxOffset)); err != nil {
+			return idxOffset, fmt.Errorf("readIndexEntry %s at offset %d failed: %v", oldIdxFileName, idxOffset, err)
 		}
 		key, offset, size := idx2.IdxFileEntry(IdxEntry)
 		glog.V(4).Infof("key %d offset %d size %d", key, offset, size)
@@ -234,10 +235,13 @@ func (v *Volume) makeupDiff(newDatFileName, newIdxFileName, oldDatFileName, oldI
 			}
 		}
 	}
+	if idxOffset < v.lastCompactIndexOffset {
+		idxOffset = v.lastCompactIndexOffset
+	}
 
 	// no updates during commit step
 	if len(incrementedHasUpdatedIndexEntry) == 0 {
-		return nil
+		return idxOffset, nil
 	}
 
 	// deal with updates during commit step
@@ -245,23 +249,23 @@ func (v *Volume) makeupDiff(newDatFileName, newIdxFileName, oldDatFileName, oldI
 		dst, idx *os.File
 	)
 	if dst, err = os.OpenFile(newDatFileName, os.O_RDWR, 0644); err != nil {
-		return fmt.Errorf("open dat file %s failed: %v", newDatFileName, err)
+		return idxOffset, fmt.Errorf("open dat file %s failed: %v", newDatFileName, err)
 	}
 	dstDatBackend := backend.NewDiskFile(dst)
 	defer dstDatBackend.Close()
 
 	if idx, err = os.OpenFile(newIdxFileName, os.O_RDWR, 0644); err != nil {
-		return fmt.Errorf("open idx file %s failed: %v", newIdxFileName, err)
+		return idxOffset, fmt.Errorf("open idx file %s failed: %v", newIdxFileName, err)
 	}
 	defer idx.Close()
 
 	var newDatCompactRevision uint16
 	newDatCompactRevision, err = fetchCompactRevisionFromDatFile(dstDatBackend)
 	if err != nil {
-		return fmt.Errorf("fetchCompactRevisionFromDatFile dst %s failed: %v", dst.Name(), err)
+		return idxOffset, fmt.Errorf("fetchCompactRevisionFromDatFile dst %s failed: %v", dst.Name(), err)
 	}
 	if oldDatCompactRevision+1 != newDatCompactRevision {
-		return fmt.Errorf("oldDatFile %s 's compact revision is %d while newDatFile %s 's compact revision is %d", oldDatFileName, oldDatCompactRevision, newDatFileName, newDatCompactRevision)
+		return idxOffset, fmt.Errorf("oldDatFile %s 's compact revision is %d while newDatFile %s 's compact revision is %d", oldDatFileName, oldDatCompactRevision, newDatFileName, newDatCompactRevision)
 	}
 
 	for key, increIdxEntry := range incrementedHasUpdatedIndexEntry {
@@ -289,11 +293,11 @@ func (v *Volume) makeupDiff(newDatFileName, newIdxFileName, oldDatFileName, oldI
 			var needleBytes []byte
 			needleBytes, err = needle.ReadNeedleBlob(oldDatBackend, increIdxEntry.offset.ToActualOffset(), increIdxEntry.size, v.Version())
 			if err != nil {
-				return fmt.Errorf("ReadNeedleBlob %s key %d offset %d size %d failed: %v", oldDatFile.Name(), key, increIdxEntry.offset.ToActualOffset(), increIdxEntry.size, err)
+				return idxOffset, fmt.Errorf("ReadNeedleBlob %s key %d offset %d size %d failed: %v", oldDatFile.Name(), key, increIdxEntry.offset.ToActualOffset(), increIdxEntry.size, err)
 			}
 			dstDatBackend.Write(needleBytes)
 			if err := dstDatBackend.Sync(); err != nil {
-				return fmt.Errorf("cannot sync needle %s: %v", dstDatBackend.File.Name(), err)
+				return idxOffset, fmt.Errorf("cannot sync needle %s: %v", dstDatBackend.File.Name(), err)
 			}
 			util.Uint32toBytes(idxEntryBytes[8:12], uint32(offset/NeedlePaddingSize))
 		} else { //deleted needle
@@ -304,22 +308,22 @@ func (v *Volume) makeupDiff(newDatFileName, newIdxFileName, oldDatFileName, oldI
 			fakeDelNeedle.AppendAtNs = uint64(time.Now().UnixNano())
 			_, _, _, err = fakeDelNeedle.Append(dstDatBackend, v.Version())
 			if err != nil {
-				return fmt.Errorf("append deleted %d failed: %v", key, err)
+				return idxOffset, fmt.Errorf("append deleted %d failed: %v", key, err)
 			}
 			util.Uint32toBytes(idxEntryBytes[8:12], uint32(0))
 		}
 
 		if _, err := idx.Seek(0, 2); err != nil {
-			return fmt.Errorf("cannot seek end of indexfile %s: %v",
+			return idxOffset, fmt.Errorf("cannot seek end of indexfile %s: %v",
 				newIdxFileName, err)
 		}
 		_, err = idx.Write(idxEntryBytes)
 		if err != nil {
-			return fmt.Errorf("cannot write indexfile %s: %v", newIdxFileName, err)
+			return idxOffset, fmt.Errorf("cannot write indexfile %s: %v", newIdxFileName, err)
 		}
 	}
 
-	return nil
+	return idxOffset, nil
 }
 
 type VolumeFileScanner4Vacuum struct {
